@@ -11,6 +11,9 @@ import mlflow.sklearn
 import json
 import time
 from statistics import mean
+import configparser
+config = configparser.ConfigParser()
+config.read((Path(__file__).parent / '.git' / 'config').as_posix())
 
 session = boto3.Session(profile_name='lsports-dev')
 credentials = session.get_credentials()
@@ -119,7 +122,8 @@ def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str,
 	recall = TP/(TP + FN)
 	f1_score = (2 * precision * recall)/(precision + recall)
 	
-	# mlflow.log_param("weights_location", Path(r"data-new\Asaf\exp2 (with heavy augmentation).zip"))
+	mlflow.log_param("Repository", config['remote "origin"'].get('url'))
+	mlflow.log_param("weights_location", detector.weights_location)
 	mlflow.log_param("Created", str(datetime.now()))
 	mlflow.log_param("Models", type(detector))
 	mlflow.log_param("git branch", Repository('.').head.shorthand)
@@ -134,16 +138,12 @@ def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str,
 	mlflow.log_metric("f1_score", f1_score)
 	mlflow.log_metric("iou_threshold", iou_threshold)
 
-	mlflow.log_artifacts(Path(r"R:\Asaf\scoreboard_model_management").as_posix())
-
-
-
 
 
 
 
 if __name__ == "__main__":
-	weights=Path(r'A:\YOLOv6\runs\train\exp2 (with heavy augmentation)\weights\best_stop_aug_ckpt.pt').as_posix()
+	weights=Path(r"R:\Asaf\best_models\scoreboard_detection\Yolov6_SMALL_with_heavy_augmentations_14_11_2022\exp2 (with heavy augmentation)\weights\best_stop_aug_ckpt.pt").as_posix()
 	yaml = Path(r"A:\YOLOv6\data\dataset.yaml").as_posix()
 	detector = Yolov6Detector(weights,yaml)
 

@@ -15,6 +15,7 @@ import math
 class Yolov6Detector:
 	def __init__(self, weights, yaml, device='0',img_size=416):
 		self.__dict__.update(locals())
+		self.weights_location = weights
 		# Init model
 		self.device = device
 		self.img_size = img_size
