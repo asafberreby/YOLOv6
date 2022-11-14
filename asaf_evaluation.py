@@ -122,7 +122,7 @@ def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str,
 	recall = TP/(TP + FN)
 	f1_score = (2 * precision * recall)/(precision + recall)
 	
-	mlflow.set_experiment('scoreboard_detector', 1)
+	mlflow.set_experiment(experiment_name='scoreboard_detector', experiment_id= '1')
 	mlflow.log_param("Repository", config['remote "origin"'].get('url'))
 	mlflow.log_param("weights_location", detector.weights_location)
 	mlflow.log_param("Created", str(datetime.now()))
