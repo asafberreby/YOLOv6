@@ -119,7 +119,7 @@ def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str,
 	recall = TP/(TP + FN)
 	f1_score = (2 * precision * recall)/(precision + recall)
 	
-	
+	# mlflow.log_param("weights_location", Path(r"data-new\Asaf\exp2 (with heavy augmentation).zip"))
 	mlflow.log_param("Created", str(datetime.now()))
 	mlflow.log_param("Models", type(detector))
 	mlflow.log_param("git branch", Repository('.').head.shorthand)
@@ -133,6 +133,8 @@ def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str,
 	mlflow.log_metric("recall", recall)
 	mlflow.log_metric("f1_score", f1_score)
 	mlflow.log_metric("iou_threshold", iou_threshold)
+
+	mlflow.log_artifacts(Path(r"R:\Asaf\scoreboard_model_management").as_posix())
 
 
 
