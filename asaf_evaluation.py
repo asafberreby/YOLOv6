@@ -6,6 +6,21 @@ import numpy as np
 import boto3
 from pygit2 import Repository, Commit
 from datetime import datetime
+import mlflow
+import mlflow.sklearn
+import json
+import time
+from statistics import mean
+
+session = boto3.Session(profile_name='lsports-dev')
+credentials = session.get_credentials()
+s3 = boto3.resource(
+	service_name='s3',
+	region_name='eu-west-1',
+	aws_access_key_id=credentials.access_key,
+	aws_secret_access_key=credentials.secret_key,
+	aws_session_token=credentials.token
+)
 
 def draw_bbox_on_image(img, box, color=(0,0,255)):
 	if box is None:
@@ -43,24 +58,36 @@ def get_iou(box1, box2):
 
 
 
-def evaluate(detector:Yolov6Detector, imgs_path:Path, annotations_path:Path):
-	sorted_images  = sorted(list(imgs_path.iterdir()), key = lambda x: x.name.split('.'))
-	sorted_txts  = sorted(list(annotations_path.iterdir()), key = lambda x: x.name.split('.'))
+def evaluate(detector:Yolov6Detector, s3_bucket, model:str, date:str, sport:str, iou_threshold:float):
+	times = []
+
+	sorted_images = sorted([it for it in list(s3_bucket.objects.all()) if 'images' in it.key and date in it.key and model in it.key and 'val' in it.key and 'images' != Path(it.key).name], key=lambda x: Path(x.key).name.split('.')[0])
+	sorted_txts = sorted([it for it in list(s3_bucket.objects.all()) if 'lables' in it.key and date in it.key and model in it.key and 'val' in it.key and 'lables' != Path(it.key).name ], key=lambda x: Path(x.key).name.split('.')[0])
+	
+	
 	couples = list(zip(sorted_images,sorted_txts))
 	TP, TN, FP, FN = 0,0,0,0
 	for couple in tqdm(couples, total= len(couples)):
-		img = cv2.imread(couple[0].as_posix())
+		img_in_bytes = s3_bucket.Object(couple[0].key).get().get('Body').read()
+		decoded_image_data = bytearray(img_in_bytes)
+		imgFromByteArr = np.frombuffer(decoded_image_data,np.uint8)
+		imgDecoded = cv2.imdecode(imgFromByteArr,cv2.IMREAD_COLOR)
+		img = imgDecoded
 		if img.shape != (416,416,3):
 			img = cv2.resize(img, (416,416))
+
+		json_file_in_bytes = s3_bucket.Object(couple[1].key).get().get('Body').read()
+		value = eval('['+str(json_file_in_bytes).replace('b', '').replace("'", "").replace(' ', ',')+']')
+		annotations = np.array([value[1], value[2], value[3], value[4]]) if len(value)>3 else None
+		tl = (annotations[0] - 0.5*annotations[2], annotations[1] - 0.5*annotations[3]) if len(value)>3 else None
+		br = (annotations[0] + 0.5*annotations[2], annotations[1] + 0.5*annotations[3]) if len(value)>3 else None
+		annotated_bbox = np.array([tl[0], tl[1], br[0], br[1]]) if len(value)>3 else None
+
+		t1 = time.time()
 		detections, relative_detections = detector.detect(img) # (x1, y1, x2, y2)
+		times.append(time.time() - t1)
+
 		detected_bbox= relative_detections.cpu().numpy() if relative_detections is not None else None
-		with open(couple[1].as_posix(), 'r') as f:
-			value = f.readline()
-			value = eval('['+ value.replace(' ', ',')+']')
-			annotations = np.array([value[1], value[2], value[3], value[4]]) if len(value)>3 else None
-			tl = (annotations[0] - 0.5*annotations[2], annotations[1] - 0.5*annotations[3]) if len(value)>3 else None
-			br = (annotations[0] + 0.5*annotations[2], annotations[1] + 0.5*annotations[3]) if len(value)>3 else None
-			annotated_bbox = np.array([tl[0], tl[1], br[0], br[1]]) if len(value)>3 else None
 
 		if annotated_bbox is None and detected_bbox is None: #means both bboxes are none
 			TN+=1
@@ -70,9 +97,9 @@ def evaluate(detector:Yolov6Detector, imgs_path:Path, annotations_path:Path):
 			FP+=1
 		else:
 			iou = get_iou(detected_bbox,annotated_bbox)
-			if iou > 0.97:
+			if iou > iou_threshold:
 				TP+=1
-			if iou < 0.97:
+			if iou < iou_threshold:
 				FP+=1
 
 	
@@ -91,7 +118,21 @@ def evaluate(detector:Yolov6Detector, imgs_path:Path, annotations_path:Path):
 	precision = TP/(TP + FP)
 	recall = TP/(TP + FN)
 	f1_score = (2 * precision * recall)/(precision + recall)
-	a =2
+	
+	
+	mlflow.log_param("Created", str(datetime.now()))
+	mlflow.log_param("Models", type(detector))
+	mlflow.log_param("git branch", Repository('.').head.shorthand)
+	mlflow.log_param("commit id", str(Repository('.').head.target))
+	mlflow.log_param("test_data", "s3/"+s3_bucket.name+'/'+model+'/'+date+'/'+'val')
+	mlflow.log_param("train_data", "should be uploaded")
+	mlflow.log_param("Sport", sport)
+	mlflow.log_param("RT per inrference", mean(times[1:]))
+	mlflow.log_metric("accuracy", accuracy)
+	mlflow.log_metric("precision", precision)
+	mlflow.log_metric("recall", recall)
+	mlflow.log_metric("f1_score", f1_score)
+	mlflow.log_metric("iou_threshold", iou_threshold)
 
 
 
@@ -100,10 +141,15 @@ def evaluate(detector:Yolov6Detector, imgs_path:Path, annotations_path:Path):
 
 
 if __name__ == "__main__":
-	weights=Path(r'/media/access/New Volume/YOLOv6/runs/train/exp2 (with heavy augmentation)/weights/best_stop_aug_ckpt.pt').as_posix()
-	yaml = Path(r"/media/access/New Volume/YOLOv6/data/dataset.yaml").as_posix()
+	weights=Path(r'A:\YOLOv6\runs\train\exp2 (with heavy augmentation)\weights\best_stop_aug_ckpt.pt').as_posix()
+	yaml = Path(r"A:\YOLOv6\data\dataset.yaml").as_posix()
 	detector = Yolov6Detector(weights,yaml)
 
-	imgs_path = Path(r"/media/access/New Volume/YOLOv6/data/custom_dataset/images/val")
-	annotations_path = Path(r"/media/access/New Volume/YOLOv6/data/custom_dataset/labels/val")
-	evaluate(detector,imgs_path,annotations_path)
+	bucket = s3.Bucket('ocr-train-test-data')
+	model = 'scoreboard_detector'
+	date = '14_11_2022'
+	sport = 'tennis+tabletennis'
+	iou_threshold = 0.97
+
+	
+	evaluate(detector,bucket,model,date,sport, iou_threshold)
